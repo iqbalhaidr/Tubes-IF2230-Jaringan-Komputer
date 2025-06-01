@@ -43,10 +43,12 @@ def main():
     parser = argparse.ArgumentParser(description="Chat client for TCP-over-UDP.")
     parser.add_argument("host", help="Server IP address")
     parser.add_argument("-p", "--port", type=int, required=True, help="Server port")
+    parser.add_argument("-n", "--name", type=str, required=True, help="Display name")
 
     args = parser.parse_args()
     SERVER_IP = args.host
     SERVER_PORT = args.port
+    CLIENT_NAME = args.name
 
     clientSock = BetterUDPSocket()
 
@@ -74,15 +76,24 @@ def main():
                 msg = session.prompt("Enter text message: ")
 
                 if msg == "!disconnect":
-                    clientSock.send(msg.encode())
+                    clientSock.send((CLIENT_NAME + ": " + msg).encode())
+                    print("Berhasil disconnect dari server!")
+                    time.sleep(1)
+                    print("Menutup aplikasi...")
+                    time.sleep(3)
+                    os.system('cls' if os.name == 'nt' else 'clear')
                     break
                 elif msg.startswith("!kill"):
                     clientSock.send(msg.encode())
                 elif msg.startswith("!change"):
-                    clientSock.send(msg.encode())
+                    OLD_CLIENT_NAME = CLIENT_NAME
+                    CLIENT_NAME = msg.removeprefix("!change ")
+                    clientSock.send((f"[SERVER]: {OLD_CLIENT_NAME} changes it's username to {CLIENT_NAME}"))
+                    continue
                 
                 # TODO: jika kalimat terlalu panjang maka dia kepotong karena kena batas maksimum MTU
-                clientSock.send(msg.encode()) # .encode() merubah String menjadi bytes
+                print("Masuk sini")
+                clientSock.send((CLIENT_NAME + ": " + msg).encode()) # .encode() merubah String menjadi bytes
 
             except Exception:
                 pass
