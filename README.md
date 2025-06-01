@@ -1,4 +1,10 @@
-### ChatTCP - JarJarJarKom
+# ChatTCP - JarJarJarKom
+
+<p align="center">
+  <img src="tests/jar.png" alt="jar" />
+  <br>
+</p>
+
 
 ## Deskripsi Umum
 
@@ -79,7 +85,7 @@ python --version
 ### Server
 
 ```bash
-uv run --link-mode=copy -m src.app.server
+uv run --link-mode=copy -m src.app.server 127.0.0.1 -p 55555
 ```
 
 ### Client (CLI)
