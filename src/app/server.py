@@ -274,6 +274,13 @@ def main():
         print(f"\n[{get_formatted_time()}] Shutdown event received, initiating server shutdown sequence...")
 
     except KeyboardInterrupt:
+        shutdown_message = (
+            f"{get_formatted_time()} [SERVER]: Server is shutting down NOW. "
+            f"(Due to KeyboardInterrupt)"
+        )
+        broadcast_message((shutdown_message + "\n").encode("utf-8"),
+                            exclude_sender=False)
+        broadcast_message(b"SHUTDOWN\n", exclude_sender=False)
         print(f"\n[{get_formatted_time()}] Server shutdown requested by user (Ctrl+C).")
         shutdown_event.set() # Set event untuk memberi tahu thread lain
     except Exception as e:
