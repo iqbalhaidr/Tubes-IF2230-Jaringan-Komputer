@@ -19,8 +19,8 @@ def broadcast_message(message: bytes, sender_addr: tuple = None):
         disconnected_clients = []
         
         for addr, conn in connected_clients.items():
-            if addr == sender_addr:  # Don't send back to sender
-                continue
+            # if addr == sender_addr:  # Don't send back to sender
+            #     continue
                 
             try:
                 if conn.connected:
@@ -52,7 +52,7 @@ def client_handler(client_conn: BetterUDPSocket, client_address: tuple):
                 if not msg:
                     continue
                     
-                decoded_msg = msg.decode().strip()
+                username, decoded_msg = msg.decode().strip().split(": ", 1)
                 
                 if not decoded_msg:
                     continue
@@ -62,7 +62,11 @@ def client_handler(client_conn: BetterUDPSocket, client_address: tuple):
                 # Handle special commands
                 if decoded_msg == "!disconnect":
                     print(f"[{get_formatted_time()}][{client_address}] Client requested disconnect.")
+                    full_message = f"[SERVER]: {username} disconnect from group chat" # Sudah ada namanya
+                    broadcast_message(full_message.encode(), sender_addr=client_address)
                     break
+                elif decoded_msg == "!kill":
+                    continue
                 elif decoded_msg == "!heartbeat":
                     # Respond to heartbeat if needed
                     continue
@@ -72,7 +76,7 @@ def client_handler(client_conn: BetterUDPSocket, client_address: tuple):
                 else:
                     # Regular chat message - broadcast to all other clients
                     timestamp = get_formatted_time()
-                    full_message = f"{timestamp} <{client_address[0]}:{client_address[1]}>: {decoded_msg}"
+                    full_message = f"{timestamp} {username}: {decoded_msg}" # Sudah ada namanya
                     broadcast_message(full_message.encode(), sender_addr=client_address)
 
             except socket.timeout:
