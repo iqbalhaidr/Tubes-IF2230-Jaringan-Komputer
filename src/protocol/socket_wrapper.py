@@ -11,45 +11,55 @@ class SelectiveRepeatWindow:
     """
     def __init__(self, window_size: int = 4):
         self.window_size = window_size
-        self.base = 0  # Sequence number terkecil yang belum di-ACK
-        self.next_seq_num = 0  # Sequence number berikutnya untuk dikirim
-        self.buffer: Dict[int, Segment] = {}  # Buffer untuk segment yang belum di-ACK
-        self.acked: Dict[int, bool] = {}  # Track segment mana yang sudah di-ACK
+        self.base = 0  
+        self.next_seq_num = 0  
+        self.buffer: Dict[int, Segment] = {}
+        self.acked: Dict[int, bool] = {}
         self.lock = threading.Lock()
         
     def can_send(self) -> bool:
         """Cek apakah masih bisa mengirim segment baru dalam window"""
         with self.lock:
             return self.next_seq_num < self.base + self.window_size
-    
+
     def add_segment(self, seq_num: int, segment: Segment):
         """Tambah segment ke buffer untuk tracking ACK"""
         with self.lock:
+            is_first_segment_in_empty_window = not self.buffer
             self.buffer[seq_num] = segment
             self.acked[seq_num] = False
-    
+            if is_first_segment_in_empty_window:
+                self.base = seq_num
+
     def mark_acked(self, seq_num: int) -> bool:
         """Mark segment sebagai ACK-ed, return True jika window bergeser"""
         with self.lock:
-            if seq_num in self.acked:
+            if seq_num in self.buffer and not self.acked.get(seq_num, False):
                 self.acked[seq_num] = True
                 
-                # Geser window base jika segment di base sudah di-ACK
                 window_moved = False
+                original_base = self.base
+
                 while self.base in self.acked and self.acked[self.base]:
-                    del self.buffer[self.base]
-                    del self.acked[self.base]
-                    self.base += 1
+                    if self.base in self.buffer: # Seharusnya selalu ada jika belum digeser
+                        del self.buffer[self.base]
+
+
                     window_moved = True
+                    if not self.buffer:
+                        self.base = self.next_seq_num
+                        break 
+                    else:
+                        self.base = min(self.buffer.keys())
                 
                 return window_moved
-            return False
-    
+            return False 
+
     def get_unacked_segments(self) -> Dict[int, Segment]:
         """Dapatkan segment yang belum di-ACK untuk retransmission"""
         with self.lock:
             return {seq: seg for seq, seg in self.buffer.items() 
-                   if not self.acked.get(seq, True)}
+                   if not self.acked.get(seq, False)}
 
 class BetterUDPSocket:
     def __init__(self, udp_socket: socket.socket = None, mtu: int = 128):
@@ -59,21 +69,18 @@ class BetterUDPSocket:
         self.peer_addr = None
         self.connected = False
         
-        # Sequence tracking sesuai spesifikasi TCP
-        self.seq = 0  # Current sequence number
-        self.ack = 0  # Current acknowledgment number
+        self.seq = 0
+        self.ack = 0
         
-        # Flow control variables
         self.send_window = SelectiveRepeatWindow(window_size=4)
-        self.recv_buffer: Dict[int, bytes] = {}  # Buffer untuk out-of-order segments
-        self.expected_seq = 0  # Sequence number yang diharapkan berikutnya
+        self.recv_buffer: Dict[int, bytes] = {}
+        self.expected_seq = 0
         
         # Timing untuk retransmission
         self.rtt_estimate = 1.0
         self.timeout = 2.0
         self.segment_timers: Dict[int, float] = {}
         
-        # Thread management
         self.retransmit_thread = None
         self.running = False
         
@@ -93,7 +100,6 @@ class BetterUDPSocket:
             for seq_num, segment in unacked.items():
                 if seq_num in self.segment_timers:
                     if current_time - self.segment_timers[seq_num] > self.timeout:
-                        # Retransmit segment yang timeout
                         try:
                             self.udp_socket.sendto(segment.to_bytes(), self.peer_addr)
                             self.segment_timers[seq_num] = current_time
@@ -101,7 +107,7 @@ class BetterUDPSocket:
                         except Exception as e:
                             print(f"[ERROR] Retransmit failed: {e}")
             
-            time.sleep(0.1)  # Check interval
+            time.sleep(0.1) 
     
     def send(self, data: bytes):
         """
@@ -113,7 +119,6 @@ class BetterUDPSocket:
         
         self._start_retransmit_timer()
         
-        # Spesifikasi: maksimal 64 byte untuk payload
         max_payload_size = min(64, self.mtu - Segment.HEADER_SIZE)
         if max_payload_size <= 0:
             raise ValueError("Header terlalu besar, tidak ada ruang untuk payload")
@@ -136,16 +141,14 @@ class BetterUDPSocket:
                 dst_port=self.peer_addr[1],
                 seq_num=seq_num,
                 ack_num=self.ack,
-                flags=0x10,  # ACK flag untuk piggyback acknowledgment
+                flags=0x10, 
                 payload=chunk
             )
             
-            # Simpan di window dan kirim
             self.send_window.add_segment(seq_num, segment)
             self.udp_socket.sendto(segment.to_bytes(), self.peer_addr)
             self.segment_timers[seq_num] = time.time()
             
-            # Update sequence number sesuai spesifikasi: seq += ukuran data
             self.seq += len(chunk)
             
             # Update window state
@@ -268,65 +271,65 @@ class BetterUDPSocket:
 
     def connect(self, ip_address: str, port: int, timeout: float = 5.0):
         """
-        Inisiasi 3-way handshake sesuai spesifikasi TCP.
+        Connect to server with proper port switching after handshake.
         """
         try:
+            # Bind client to random port
             self.udp_socket.bind(('', 0))
+            client_port = self.udp_socket.getsockname()[1]
             
-            # 1. Generate random initial sequence number (spesifikasi)
+            # Generate random ISN
             x = random.randrange(0, 2**32)
             
-            # Kirim SYN
+            # Send SYN to server's listener port
             syn = Segment(
-                src_port=self.udp_socket.getsockname()[1],
+                src_port=client_port,
                 dst_port=port,
                 seq_num=x,
                 flags=0x02,  # SYN
                 payload=b'',
             )
             self.udp_socket.sendto(syn.to_bytes(), (ip_address, port))
-            print(f"[HANDSHAKE] Sent SYN with seq {x}")
+            print(f"[HANDSHAKE] Sent SYN with seq {x} to {ip_address}:{port}")
             
-            # 2. Tunggu SYN+ACK
+            # Wait for SYN+ACK (will come from server's NEW port)
             self.udp_socket.settimeout(timeout)
-            start = time.time()
-            while True:
-                raw, addr = self.udp_socket.recvfrom(self.mtu)
-                segment = Segment.from_bytes(raw)
-                
-                # Verifikasi SYN+ACK sesuai spesifikasi
-                if (segment.flags == 0x12 and segment.ack_num == x + 1):
-                    y = segment.seq_num
-                    print(f"[HANDSHAKE] Received SYN+ACK with seq {y}")
-                    break
-                    
-                if time.time() - start > timeout:
-                    raise TimeoutError("Handshake timeout (SYN+ACK)")
-
-            # 3. Kirim ACK final
+            raw, addr = self.udp_socket.recvfrom(self.mtu)
+            segment = Segment.from_bytes(raw)
+            
+            if segment.flags != 0x12 or segment.ack_num != x + 1:
+                raise ValueError("Invalid SYN+ACK response")
+            
+            y = segment.seq_num
+            server_new_port = segment.src_port  # Server's new port for this connection
+            server_new_addr = (ip_address, server_new_port)
+            
+            print(f"[HANDSHAKE] Received SYN+ACK with seq {y} from server's new port {server_new_port}")
+            
+            # Send final ACK to server's NEW port
             ack_segment = Segment(
-                src_port=self.udp_socket.getsockname()[1],
-                dst_port=port,
+                src_port=client_port,
+                dst_port=server_new_port,  # Send to server's new port
                 seq_num=x + 1,
                 ack_num=y + 1,
                 flags=0x10,  # ACK
                 payload=b'',
             )
-            self.udp_socket.sendto(ack_segment.to_bytes(), (ip_address, port))
-            print(f"[HANDSHAKE] Sent final ACK")
+            self.udp_socket.sendto(ack_segment.to_bytes(), server_new_addr)
+            print(f"[HANDSHAKE] Sent final ACK to server's new port {server_new_port}")
             
-            # Setup connection state sesuai spesifikasi TCP
-            self.peer_addr = (ip_address, port)
+            # CRITICAL: Update peer address to server's NEW port
+            self.peer_addr = server_new_addr  # Not the original listener port!
             self.connected = True
-            self.seq = x + 1  # Sequence number setelah handshake
-            self.ack = y + 1  # ACK number setelah handshake
+            self.seq = x + 1
+            self.ack = y + 1
             self.expected_seq = y + 1
             
             # Reset window state
-            self.send_window.next_seq_num = 0
-            self.send_window.base = 0
+            self.send_window = SelectiveRepeatWindow(window_size=4)
+            self.recv_buffer = {}
             
-            print(f"[CONNECTED] Successfully connected to {ip_address}:{port}")
+            print(f"[CONNECTED] Successfully connected to {server_new_addr}")
             
         except Exception as e:
             print(f"[ERROR] Connection failed: {e}")
@@ -339,14 +342,17 @@ class BetterUDPSocket:
         self.udp_socket.bind((ip, port))
         print(f"[LISTEN] Listening on {ip}:{port}")
 
+    # socket_wrapper.py - Critical fix for accept() method
+
     def accept(self, timeout: float = None):
         """
-        Tunggu dan terima koneksi masuk dengan 3-way handshake.
+        Accept incoming connection with proper socket isolation.
+        The key fix: After handshake, client should communicate on a different socket.
         """
         if timeout is not None:
             self.udp_socket.settimeout(timeout)
 
-        # 1. Tunggu SYN
+        # 1. Wait for SYN
         raw, addr = self.udp_socket.recvfrom(self.mtu)
         syn = Segment.from_bytes(raw)
         if syn.flags != 0x02:
@@ -355,37 +361,53 @@ class BetterUDPSocket:
         x = syn.seq_num
         print(f"[HANDSHAKE] Received SYN from {addr} with seq {x}")
 
-        # 2. Generate random sequence number dan kirim SYN+ACK
+        # 2. Generate random sequence number and send SYN+ACK
         y = random.randrange(0, 2**32)
+        
+        # CRITICAL FIX: Create new socket for this client BEFORE sending SYN+ACK
+        client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        client_socket.bind(('', 0))  # Bind to new port
+        new_port = client_socket.getsockname()[1]
+        
+        # Send SYN+ACK with the NEW port number
         synack = Segment(
-            src_port=self.udp_socket.getsockname()[1],
+            src_port=new_port,  # Use new port, not original listener port
             dst_port=addr[1],
             seq_num=y,
-            ack_num=x + 1,  # ACK untuk SYN client
+            ack_num=x + 1,
             flags=0x12,  # SYN+ACK
             payload=b''
         )
-        self.udp_socket.sendto(synack.to_bytes(), addr)
-        print(f"[HANDSHAKE] Sent SYN+ACK with seq {y}")
+        
+        # Send SYN+ACK from the NEW socket, not the listener socket
+        client_socket.sendto(synack.to_bytes(), addr)
+        print(f"[HANDSHAKE] Sent SYN+ACK with seq {y} from new port {new_port}")
 
-        # 3. Tunggu ACK final
-        raw2, addr2 = self.udp_socket.recvfrom(self.mtu)
+        # 3. Wait for final ACK on the NEW socket
+        client_socket.settimeout(timeout or 5.0)
+        raw2, addr2 = client_socket.recvfrom(self.mtu)
         fin_ack = Segment.from_bytes(raw2)
+        
+        if addr2 != addr:
+            raise ValueError(f"ACK from wrong address: expected {addr}, got {addr2}")
         if fin_ack.flags != 0x10 or fin_ack.ack_num != y + 1:
             raise ValueError("Expected final ACK")
         
-        print(f"[HANDSHAKE] Received final ACK")
+        print(f"[HANDSHAKE] Received final ACK on new port {new_port}")
 
-        # Buat socket baru untuk koneksi dengan state yang benar
-        new_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        conn = BetterUDPSocket(new_socket, mtu=self.mtu)
+        # Create connection object with the NEW isolated socket
+        conn = BetterUDPSocket(client_socket, mtu=self.mtu)
         conn.peer_addr = addr
         conn.connected = True
-        conn.seq = y + 1  # Server sequence setelah handshake
-        conn.ack = x + 1  # Server ACK setelah handshake
+        conn.seq = y + 1
+        conn.ack = x + 1
         conn.expected_seq = x + 1
         
-        print(f"[CONNECTED] Client {addr} connected successfully")
+        # Initialize fresh window state
+        conn.send_window = SelectiveRepeatWindow(window_size=4)
+        conn.recv_buffer = {}
+        
+        print(f"[CONNECTED] Client {addr} connected on isolated port {new_port}")
         return conn, addr
 
     def close(self):
