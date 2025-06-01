@@ -66,14 +66,15 @@ class SelectiveRepeatWindow:
 
 
 class BetterUDPSocket:
-    def __init__(self, udp_socket: socket.socket = None, mtu: int = 128):
+    def __init__(self, udp_socket: socket.socket = None, mtu: int = 128, debug: bool = True):
         self.udp_socket = udp_socket or socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         # Pastikan blocking (karena kita akan menggunakan timeout secara eksplisit)
         self.udp_socket.setblocking(True)
         self.mtu = mtu
         self.peer_addr = None
         self.connected = False
-
+        
+        self.debug = debug
         # Sequence tracking sesuai spesifikasi TCP
         self.seq = 0  # Current sequence number
         self.ack = 0  # Current acknowledgment number
@@ -119,9 +120,11 @@ class BetterUDPSocket:
                         try:
                             self.udp_socket.sendto(segment.to_bytes(), self.peer_addr)
                             self.segment_timers[seq_num] = current_time
-                            print(f"[RETRANSMIT] Seq {seq_num}")
+                            if self.debug:
+                                print(f"[RETRANSMIT] Seq {seq_num}")
                         except Exception as e:
-                            print(f"[ERROR] Retransmit failed: {e}")
+                            if self.debug:
+                                print(f"[ERROR] Retransmit failed: {e}")
             time.sleep(0.1)
 
     def send(self, data: bytes):
@@ -175,12 +178,14 @@ class BetterUDPSocket:
             with self.send_window.lock:
                 self.send_window.next_seq_num = seq_num + 1
 
-            print(f"[SEND] Seq {seq_num}, Payload: {len(chunk)} bytes")
+            if self.debug:
+                print(f"[SEND] Seq {seq_num}, Payload: {len(chunk)} bytes")
 
         # Tunggu sampai semua segment di‐ACK
         while self.send_window.get_unacked_segments():
             self._process_incoming_acks(timeout=0.1)
-
+        time.sleep(1)
+    
     def _process_incoming_acks(self, timeout: float = 0.1):
         """Proses ACK yang masuk dari peer"""
         try:
@@ -198,10 +203,12 @@ class BetterUDPSocket:
                 for seq in list(self.send_window.buffer.keys()):
                     sent_segment = self.send_window.buffer[seq]
                     if ack_num == seq + len(sent_segment.payload):
-                        if self.send_window.mark_acked(seq):
-                            print(f"[ACK] Received ACK for seq {seq}, window moved")
-                        else:
-                            print(f"[ACK] Received ACK for seq {seq}")
+                        moved = self.send_window.mark_acked(seq)
+                        if self.debug:
+                            if moved:
+                                print(f"[ACK] Received ACK for seq {seq}, window moved")
+                            else:
+                                print(f"[ACK] Received ACK for seq {seq}")
                         break
 
             # Jika ada payload, forward ke handler
@@ -211,7 +218,8 @@ class BetterUDPSocket:
         except socket.timeout:
             pass
         except Exception as e:
-            print(f"[ERROR] Processing ACK: {e}")
+            if self.debug:
+                print(f"[ERROR] Processing ACK: {e}")
 
     def _handle_data_segment(self, segment: Segment):
         """Handle segment data yang diterima sesuai spesifikasi TCP"""
@@ -232,9 +240,11 @@ class BetterUDPSocket:
         )
         try:
             self.udp_socket.sendto(ack_segment.to_bytes(), self.peer_addr)
-            print(f"[ACK SENT] For seq {seq_num} -> ack {seq_num + payload_len}")
+            if self.debug:
+                print(f"[ACK SENT] For seq {seq_num} -> ack {seq_num + payload_len}")
         except Exception as e:
-            print(f"[ERROR] Sending ACK: {e}")
+            if self.debug:
+                print(f"[ERROR] Sending ACK: {e}")
 
     def receive(self, timeout: float = None) -> bytes:
         """
@@ -281,7 +291,8 @@ class BetterUDPSocket:
         except socket.timeout:
             return b''
         except Exception as e:
-            print(f"[ERROR] Receiving data: {e}")
+            if self.debug:
+                print(f"[ERROR] Receiving data: {e}")
             return b''
 
     def connect(self, ip_address: str, port: int, timeout: float = 5.0):
@@ -313,7 +324,8 @@ class BetterUDPSocket:
         while time.time() < deadline:
             # Kirim (atau kirim ulang) SYN
             self.udp_socket.sendto(syn.to_bytes(), server_addr)
-            print(f"[HANDSHAKE] Sent SYN (seq={self.seq}) to {server_addr}")
+            if self.debug:
+                print(f"[HANDSHAKE] Sent SYN (seq={self.seq}) to {server_addr}")
 
             # Tunggu interval kecil untuk cek SYN+ACK
             wait_until = time.time() + interval
@@ -328,7 +340,8 @@ class BetterUDPSocket:
                         y = segment.seq_num
                         self.peer_addr = addr
                         received_synack = True
-                        print(f"[HANDSHAKE] Received SYN+ACK from {addr}, server_seq={y}, ack={segment.ack_num}")
+                        if self.debug:
+                            print(f"[HANDSHAKE] Received SYN+ACK from {addr}, server_seq={y}, ack={segment.ack_num}")
                         break
                 except socket.timeout:
                     break
@@ -353,14 +366,16 @@ class BetterUDPSocket:
             payload=b'',
         )
         self.udp_socket.sendto(ack_segment.to_bytes(), self.peer_addr)
-        print(f"[HANDSHAKE] Sent final ACK (seq={self.seq}, ack={self.ack}) to {self.peer_addr}")
+        if self.debug:
+            print(f"[HANDSHAKE] Sent final ACK (seq={self.seq}, ack={self.ack}) to {self.peer_addr}")
 
         self.connected = True
         self.expected_seq = y + 1
         self.send_window.next_seq_num = self.seq
         self.send_window.base = self.seq
         self.udp_socket.setblocking(True)
-        print(f"[CONNECTED] Connected to {self.peer_addr}")
+        if self.debug:
+            print(f"[CONNECTED] Connected to {self.peer_addr}")
 
     def get_state(self):
         """
@@ -373,7 +388,8 @@ class BetterUDPSocket:
         Siapkan socket untuk menerima koneksi masuk.
         """
         self.udp_socket.bind((ip, port))
-        print(f"[LISTEN] Listening on {ip}:{port}")
+        if self.debug:
+            print(f"[LISTEN] Listening on {ip}:{port}")
 
     # socket_wrapper.py - Critical fix for accept() method
 
@@ -397,7 +413,8 @@ class BetterUDPSocket:
             raise ValueError("Expected SYN")
 
         x = syn.seq_num
-        print(f"[HANDSHAKE] Received SYN from {addr} seq={x}")
+        if self.debug:
+            print(f"[HANDSHAKE] Received SYN from {addr} seq={x}")
 
         # 2. Siapkan ephemeral socket untuk SYN+ACK
         new_conn_socket_raw = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -430,7 +447,8 @@ class BetterUDPSocket:
 
         while time.time() < deadline:
             new_conn_socket_raw.sendto(synack.to_bytes(), addr)
-            print(f"[HANDSHAKE] Sent SYN+ACK from {listening_ip}:{eph_port} seq={y} to {addr}")
+            if self.debug:
+                print(f"[HANDSHAKE] Sent SYN+ACK from {listening_ip}:{eph_port} seq={y} to {addr}")
 
             wait_until = time.time() + interval
             while time.time() < wait_until:
@@ -441,7 +459,8 @@ class BetterUDPSocket:
                     # Cukup cek flag==ACK dan ack_num benar, tanpa memeriksa port lagi
                     if fin_ack.flags == 0x10 and fin_ack.ack_num == y + 1:
                         received_final = True
-                        print(f"[HANDSHAKE] Received final ACK from {addr} ack={fin_ack.ack_num}")
+                        if self.debug:
+                            print(f"[HANDSHAKE] Received final ACK from {addr} ack={fin_ack.ack_num}")
                         break
                 except socket.timeout:
                     break
@@ -463,8 +482,8 @@ class BetterUDPSocket:
         conn.ack = x + 1
         conn.expected_seq = x + 1
         conn.udp_socket.setblocking(True)
-
-        print(f"[CONNECTED] {addr} connected (server ephemeral port={eph_port})")
+        if self.debug:
+            print(f"[CONNECTED] {addr} connected (server ephemeral port={eph_port})")
         return conn, addr
 
     def start_receiving_in_background(self, callback):
@@ -506,17 +525,20 @@ class BetterUDPSocket:
                     payload=b''
                 )
                 self.udp_socket.sendto(fin_segment.to_bytes(), self.peer_addr)
-                print("[CLOSE] Sent FIN")
+                if self.debug:
+                    print("[CLOSE] Sent FIN")
 
                 self.udp_socket.settimeout(2.0)
                 raw, addr = self.udp_socket.recvfrom(self.mtu)
                 response = Segment.from_bytes(raw)
-                if response.flags & 0x11:  # FIN+ACK
+                if response.flags & 0x11 and self.debug:  # FIN+ACK
                     print("[CLOSE] Received FIN+ACK, connection closed gracefully")
             except Exception as e:
-                print(f"[CLOSE] Error during graceful close: {e}")
+                if self.debug:
+                    print(f"[CLOSE] Error during graceful close: {e}")
 
         self.running = False
         self.connected = False
         self.udp_socket.close()
-        print("[CLOSE] Socket closed")
+        if self.debug:
+            print("[CLOSE] Socket closed")
