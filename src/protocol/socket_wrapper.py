@@ -160,6 +160,7 @@ class BetterUDPSocket:
         # Tunggu sampai semua segment di-ACK
         while self.send_window.get_unacked_segments():
             self._process_incoming_acks(timeout=0.1)
+        time.sleep(1)
     
     def _process_incoming_acks(self, timeout: float = 0.1):
         """Process ACK yang masuk dari peer"""

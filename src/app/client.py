@@ -9,6 +9,8 @@ from collections import deque
 from protocol.socket_wrapper import BetterUDPSocket
 import threading, time, os, argparse
 
+thread_lock = threading.Lock()
+
 # Fungsi menerima data chat dari server
 def receiveDataServer(clientSocket: BetterUDPSocket, msgs: deque, server_ip: str):
     cnt = 0
@@ -37,8 +39,9 @@ def receiveDataServer(clientSocket: BetterUDPSocket, msgs: deque, server_ip: str
 def heartbeat(clientSocket: BetterUDPSocket):
     while True:
         try:
-            clientSocket.send(("[HEARTBEAT]: !heartbeat").encode()) # Sementara dikirim dalam format "!heartbeat"
-            time.sleep(1)
+            with thread_lock:
+                clientSocket.send(("[HEARTBEAT]: !heartbeat").encode()) # Sementara dikirim dalam format "!heartbeat"
+            time.sleep(3)
         except Exception:
             pass
 
@@ -96,17 +99,20 @@ def main():
                     os.system('cls' if os.name == 'nt' else 'clear')
                     break
                 elif msg.startswith("!kill"):
-                    clientSock.send((CLIENT_NAME + ": " + msg).encode())
+                    with thread_lock:
+                        clientSock.send((CLIENT_NAME + ": " + msg).encode())
                     continue
                 elif msg.startswith("!change"):
                     OLD_CLIENT_NAME = CLIENT_NAME
                     CLIENT_NAME = msg.removeprefix("!change ")
-                    clientSock.send((f"[SERVER]: {OLD_CLIENT_NAME} changes it's username to {CLIENT_NAME}").encode())
+                    with thread_lock:
+                        clientSock.send((f"[SERVER]: {OLD_CLIENT_NAME} changes it's username to {CLIENT_NAME}").encode())
                     continue
                 
                 # TODO: jika kalimat terlalu panjang maka dia kepotong karena kena batas maksimum MTU
-                print("Masuk sini")
-                clientSock.send((CLIENT_NAME + ": " + msg).encode()) # .encode() merubah String menjadi bytes
+                # print("Masuk sini")
+                with thread_lock:
+                    clientSock.send((CLIENT_NAME + ": " + msg).encode()) # .encode() merubah String menjadi bytes
 
             except Exception:
                 pass
