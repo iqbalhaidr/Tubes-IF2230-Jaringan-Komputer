@@ -1,7 +1,7 @@
 # ChatTCP - JarJarJarKom
 
 <p align="center">
-  <img src="test/jar.png" alt="jar" />
+  <img src="tests/jar.png" alt="jar" />
   <br>
 </p>
 
