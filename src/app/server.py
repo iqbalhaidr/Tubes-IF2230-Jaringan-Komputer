@@ -51,104 +51,144 @@ def broadcast_message(message: bytes, sender_addr: tuple = None, exclude_sender:
 def client_handler(client_conn: BetterUDPSocket, client_address: tuple):
     """Handle individual client communication in separate thread."""
     print(f"[{get_formatted_time()}] Started handler for client {client_address}")
-    username = f"User-{client_address[1]}" # Default username, bisa diubah dengan mekanisme login
-    
-    try:
-        # Kirim pesan selamat datang atau notifikasi user bergabung ke semua klien
-        # join_message = f"{get_formatted_time()} [SERVER]: {username} has joined the chat."
-        # # print(join_message)
-        # broadcast_message(join_message.encode(), sender_addr=client_address, exclude_sender=False)
+    username = f"User-{client_address[1]}"  # Default username, bisa diubah dengan mekanisme login
 
-        while client_conn.connected and not shutdown_event.is_set(): # Periksa shutdown_event
+    # Buffer untuk merangkai potongan segmen hingga one-line (\n) lengkap
+    buffer = b""
+
+    try:
+        while client_conn.connected and not shutdown_event.is_set():
             try:
-                msg_bytes = client_conn.receive(timeout=1.0)
-                if not msg_bytes:
-                    if shutdown_event.is_set(): # Jika server mau shutdown, keluar
+                # Terima potongan byte (timeout pendek)
+                chunk = client_conn.receive(timeout=1.0)
+                if not chunk:
+                    # Kalau tidak ada, cek shutdown_event, lalu ulangi loop
+                    if shutdown_event.is_set():
                         break
                     continue
-                    
-                username, decoded_msg = msg_bytes.decode().strip().split(": ", 1)
-                # decoded_msg,  = msg_bytes.decode().strip()
-                
-                if not decoded_msg:
-                    continue
-                    
-                # print(f"[{get_formatted_time()}] <{username}> ({client_address}): {decoded_msg}")
 
-                # Handle special commands
-                if decoded_msg == "!disconnect":
-                    print(f"[{get_formatted_time()}] <{username}> ({client_address}) requested disconnect.")
-                    # Pesan broadcast akan ditangani di finally block saat keluar
-                    break
-                
-                elif decoded_msg.startswith("!kill"):
-                    parts = decoded_msg.split(" ", 1)
-                    if len(parts) == 2 and parts[0] == "!kill":
-                        password_attempt = parts[1]
-                        if password_attempt == SERVER_KILL_PASSWORD:
-                            print(f"{get_formatted_time()} SERVER SHUTDOWN INITIATED BY {username} ({client_address}).")
-                            shutdown_message = f"{get_formatted_time()} [SERVER]: Server is shutting down NOW. (Initiated by {username})"
-                            broadcast_message(shutdown_message.encode(), exclude_sender=False)
-                            broadcast_message("SHUTDOWN".encode(), exclude_sender=False)
-                            shutdown_event.set() # Memberi sinyal ke main thread dan listener thread
-                            break # Keluar dari handler
-                        else:
-                            error_msg = f"{get_formatted_time()} [SERVER]: Incorrect password for !kill command."
-                            client_conn.send(error_msg.encode())
+                # Tambahkan ke buffer
+                buffer += chunk
+
+                # Selagi ada newline, proses satu baris penuh
+                while b"\n" in buffer:
+                    line, buffer = buffer.split(b"\n", 1)
+                    text = line.decode("utf-8", errors="replace").strip()
+                    if not text:
+                        continue
+
+                    # Sekarang text berformat "username: message"
+                    if ": " in text:
+                        username, decoded_msg = text.split(": ", 1)
                     else:
-                        error_msg = f"{get_formatted_time()} [SERVER]: Invalid !kill command format. Use: !kill <password>"
-                        client_conn.send(error_msg.encode())
-                    continue
-                elif decoded_msg == "!heartbeat":
-                    broadcast_message(f"COUNT: {len(connected_clients)}".encode(), sender_addr=client_address, exclude_sender=False)
-                    print("Masuk heartbeat")
-                    # Respond to heartbeat if needed
-                    continue
-                elif decoded_msg.startswith("!"): # Perintah tidak dikenal
-                    unknown_cmd_msg = f"[{get_formatted_time()}] [SERVER]: Unknown command: {decoded_msg.split(' ')[0]}"
-                    client_conn.send(unknown_cmd_msg.encode())
-                    continue
-                else:
-                    # Regular chat message
-                    timestamp = get_formatted_time()
-                    full_message = f"{timestamp} {username}: {decoded_msg}" # Sudah ada namanya
-                    broadcast_message(full_message.encode(), sender_addr=client_address, exclude_sender=False)
+                        # Jika tak sesuai format, kita jadikan keseluruhan sebagai message
+                        decoded_msg = text
 
+                    print(f"[{get_formatted_time()}] <{username}> ({client_address}): {decoded_msg}")
+
+                    # Tangani perintah khusus
+                    if decoded_msg == "!disconnect":
+                        print(f"[{get_formatted_time()}] <{username}> ({client_address}) requested disconnect.")
+                        # Akan keluar ke finally
+                        break
+
+                    elif decoded_msg.startswith("!kill"):
+                        parts = decoded_msg.split(" ", 1)
+                        if len(parts) == 2 and parts[0] == "!kill":
+                            password_attempt = parts[1]
+                            if password_attempt == SERVER_KILL_PASSWORD:
+                                print(f"{get_formatted_time()} SERVER SHUTDOWN INITIATED BY {username} ({client_address}).")
+                                shutdown_message = (
+                                    f"{get_formatted_time()} [SERVER]: Server is shutting down NOW. "
+                                    f"(Initiated by {username})"
+                                )
+                                broadcast_message((shutdown_message + "\n").encode("utf-8"),
+                                                  exclude_sender=False)
+                                broadcast_message(b"SHUTDOWN\n", exclude_sender=False)
+                                shutdown_event.set()
+                                break
+                            else:
+                                error_msg = (
+                                    f"{get_formatted_time()} [SERVER]: Incorrect password for !kill command.\n"
+                                )
+                                client_conn.send(error_msg.encode("utf-8"))
+                        else:
+                            error_msg = (
+                                f"{get_formatted_time()} [SERVER]: Invalid !kill format. Use: !kill <password>\n"
+                            )
+                            client_conn.send(error_msg.encode("utf-8"))
+                        continue
+
+                    elif decoded_msg == "!heartbeat":
+                        # Kirim jumlah klien yang terhubung
+                        count_msg = f"COUNT: {len(connected_clients)}\n"
+                        client_conn.send(count_msg.encode("utf-8"))
+                        continue
+
+                    elif decoded_msg.startswith("!awal"):
+                        _, nama = decoded_msg.split(" ", 1)
+                        timestamp = get_formatted_time()
+                        full_message = f"{timestamp} [SERVER]: {nama} has joined!.\n"
+                        broadcast_message(full_message.encode("utf-8"),
+                                          sender_addr=client_address,
+                                          exclude_sender=False)
+
+                    elif decoded_msg.startswith("!"):
+                        unknown_cmd = (
+                            f"[{get_formatted_time()}] [SERVER]: Unknown command: {decoded_msg.split()[0]}\n"
+                        )
+                        client_conn.send(unknown_cmd.encode("utf-8"))
+                        continue
+
+                    else:
+                        # Pesan chat biasa → broadcast (termasuk newline)
+                        timestamp = get_formatted_time()
+                        full_message = f"{timestamp} {username}: {decoded_msg}\n"
+                        broadcast_message(full_message.encode("utf-8"),
+                                          sender_addr=client_address,
+                                          exclude_sender=False)
+
+                # Jika keluar akibat !disconnect atau shutdown, hentikan loop
+                if shutdown_event.is_set() or not client_conn.connected:
+                    break
 
             except socket.timeout:
-                # Check if client is still connected or if server is shutting down
+                # Timeout receive → periksa shutdown_event lalu ulangi
                 if shutdown_event.is_set():
                     break
-                continue # Kembali ke awal loop while client_conn.connected
+                continue
+
             except ConnectionResetError:
                 print(f"[{get_formatted_time()}] Connection reset by {username} ({client_address}).")
                 break
+
             except Exception as e:
                 print(f"[{get_formatted_time()}] <{username}> ({client_address}) Handler error: {e}")
                 break
-                
+
     except Exception as e:
         print(f"[{get_formatted_time()}] <{username}> ({client_address}) Fatal handler error: {e}")
+
     finally:
         print(f"[{get_formatted_time()}] <{username}> ({client_address}) Closing client connection.")
-        
-    
-        # Kirim pesan bahwa user telah keluar, hanya jika bukan karena server shutdown
-        if not shutdown_event.is_set() and client_conn.connected: # Cek apakah masih connected sebelum broadcast
-            disconnect_broadcast_message = f"{get_formatted_time()} [SERVER]: {username} has left the chat."
-            broadcast_message(disconnect_broadcast_message.encode(), sender_addr=client_address, exclude_sender=False)
+
+        # Broadcast "left chat" (kecuali server shutdown)
+        if not shutdown_event.is_set() and client_conn.connected:
+            leave_msg = f"{get_formatted_time()} [SERVER]: {username} has left the chat.\n"
+            broadcast_message(leave_msg.encode("utf-8"),
+                              sender_addr=client_address,
+                              exclude_sender=False)
 
         with clients_lock:
             if client_address in connected_clients:
                 del connected_clients[client_address]
-                print(f"[{get_formatted_time()}] Client {client_address} removed from active list. Total: {len(connected_clients)}")
-        
+                print(f"[{get_formatted_time()}] Client {client_address} removed. Total: {len(connected_clients)}")
+
         try:
             if client_conn.connected:
-                 client_conn.close()
+                client_conn.close()
         except Exception as e:
             print(f"[{get_formatted_time()}] Error closing connection for {client_address}: {e}")
-
 
 def listen_for_connections(server_socket: BetterUDPSocket):
     """Listen for new client connections in separate thread."""
@@ -203,7 +243,7 @@ def listen_for_connections(server_socket: BetterUDPSocket):
 
 def main():
     SERVER_IP = '127.0.0.1'
-    SERVER_PORT = 12354
+    SERVER_PORT = 55555
 
     server_socket = BetterUDPSocket()
     listener_thread = None
