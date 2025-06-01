@@ -55,9 +55,9 @@ def client_handler(client_conn: BetterUDPSocket, client_address: tuple):
 
     # Buffer untuk merangkai potongan segmen hingga one-line (\n) lengkap
     buffer = b""
-
+    client_requested_disconnect = False
     try:
-        while client_conn.connected and not shutdown_event.is_set():
+        while client_conn.connected and not shutdown_event.is_set() and not client_requested_disconnect:
             try:
                 # Terima potongan byte (timeout pendek)
                 chunk = client_conn.receive(timeout=1.0)
@@ -72,6 +72,8 @@ def client_handler(client_conn: BetterUDPSocket, client_address: tuple):
 
                 # Selagi ada newline, proses satu baris penuh
                 while b"\n" in buffer:
+                    if client_requested_disconnect:
+                        break
                     line, buffer = buffer.split(b"\n", 1)
                     text = line.decode("utf-8", errors="replace").strip()
                     if not text:
@@ -89,7 +91,7 @@ def client_handler(client_conn: BetterUDPSocket, client_address: tuple):
                     # Tangani perintah khusus
                     if decoded_msg == "!disconnect":
                         print(f"[{get_formatted_time()}] <{username}> ({client_address}) requested disconnect.")
-                        # Akan keluar ke finally
+                        client_requested_disconnect = True
                         break
 
                     elif decoded_msg.startswith("!kill"):
@@ -160,10 +162,12 @@ def client_handler(client_conn: BetterUDPSocket, client_address: tuple):
 
             except ConnectionResetError:
                 print(f"[{get_formatted_time()}] Connection reset by {username} ({client_address}).")
+                client_requested_disconnect = True 
                 break
 
             except Exception as e:
                 print(f"[{get_formatted_time()}] <{username}> ({client_address}) Handler error: {e}")
+                client_requested_disconnect = True 
                 break
 
     except Exception as e:
@@ -242,7 +246,7 @@ def listen_for_connections(server_socket: BetterUDPSocket):
 
 
 def main():
-    SERVER_IP = '127.0.0.1'
+    SERVER_IP = '0.0.0.0'
     SERVER_PORT = 55555
 
     server_socket = BetterUDPSocket()
