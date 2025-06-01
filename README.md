@@ -182,7 +182,7 @@ sudo tc qdisc del dev lo root netem delay 100ms 50ms reorder 8% corrupt 5% dupli
   <tr>
     <td>Muh. Rusmin Nurwadin</td>
     <td>13523068</td>
-    <td>Flow Control & Selective Repeat ARQ</td>
+    <td>Implementasi Flow Control</td>
   </tr>
     <tr>
     <td>Muhammad Iqbal Haidar</td>
