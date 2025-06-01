@@ -2,8 +2,7 @@
 name = "chattcp"
 version = "0.1.0"
 description = "Implementasi protokol TCP di atas UDP untuk aplikasi chat."
-authors = [{name = "Nama Anda", email =  "email@domain.com"}]
-
+authors = [{name = "nama Anda", email = "email@domain.com"}]
 [build-system]
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
