@@ -3,7 +3,7 @@ import socket
 import threading
 import time
 from datetime import datetime
-from ..protocol.socket_wrapper import BetterUDPSocket
+from protocol.socket_wrapper import BetterUDPSocket
 
 
 # Event untuk memberi sinyal shutdown server
@@ -55,9 +55,9 @@ def client_handler(client_conn: BetterUDPSocket, client_address: tuple):
     
     try:
         # Kirim pesan selamat datang atau notifikasi user bergabung ke semua klien
-        join_message = f"[{get_formatted_time()}] [SERVER]: {username} has joined the chat."
-        print(join_message)
-        broadcast_message(join_message.encode(), sender_addr=client_address, exclude_sender=False)
+        # join_message = f"{get_formatted_time()} [SERVER]: {username} has joined the chat."
+        # # print(join_message)
+        # broadcast_message(join_message.encode(), sender_addr=client_address, exclude_sender=False)
 
         while client_conn.connected and not shutdown_event.is_set(): # Periksa shutdown_event
             try:
@@ -67,12 +67,13 @@ def client_handler(client_conn: BetterUDPSocket, client_address: tuple):
                         break
                     continue
                     
-                decoded_msg = msg_bytes.decode().strip()
+                username, decoded_msg = msg_bytes.decode().strip().split(": ", 1)
+                # decoded_msg,  = msg_bytes.decode().strip()
                 
                 if not decoded_msg:
                     continue
                     
-                print(f"[{get_formatted_time()}] <{username}> ({client_address}): {decoded_msg}")
+                # print(f"[{get_formatted_time()}] <{username}> ({client_address}): {decoded_msg}")
 
                 # Handle special commands
                 if decoded_msg == "!disconnect":
@@ -80,25 +81,27 @@ def client_handler(client_conn: BetterUDPSocket, client_address: tuple):
                     # Pesan broadcast akan ditangani di finally block saat keluar
                     break
                 
-            
                 elif decoded_msg.startswith("!kill"):
                     parts = decoded_msg.split(" ", 1)
                     if len(parts) == 2 and parts[0] == "!kill":
                         password_attempt = parts[1]
                         if password_attempt == SERVER_KILL_PASSWORD:
-                            print(f"[{get_formatted_time()}] SERVER SHUTDOWN INITIATED BY {username} ({client_address}).")
-                            shutdown_message = f"[{get_formatted_time()}] [SERVER]: Server is shutting down NOW. (Initiated by {username})"
+                            print(f"{get_formatted_time()} SERVER SHUTDOWN INITIATED BY {username} ({client_address}).")
+                            shutdown_message = f"{get_formatted_time()} [SERVER]: Server is shutting down NOW. (Initiated by {username})"
                             broadcast_message(shutdown_message.encode(), exclude_sender=False)
+                            broadcast_message("SHUTDOWN".encode(), exclude_sender=False)
                             shutdown_event.set() # Memberi sinyal ke main thread dan listener thread
                             break # Keluar dari handler
                         else:
-                            error_msg = f"[{get_formatted_time()}] [SERVER]: Incorrect password for !kill command."
+                            error_msg = f"{get_formatted_time()} [SERVER]: Incorrect password for !kill command."
                             client_conn.send(error_msg.encode())
                     else:
-                        error_msg = f"[{get_formatted_time()}] [SERVER]: Invalid !kill command format. Use: !kill <password>"
+                        error_msg = f"{get_formatted_time()} [SERVER]: Invalid !kill command format. Use: !kill <password>"
                         client_conn.send(error_msg.encode())
                     continue
                 elif decoded_msg == "!heartbeat":
+                    broadcast_message(f"COUNT: {len(connected_clients)}".encode(), sender_addr=client_address, exclude_sender=False)
+                    print("Masuk heartbeat")
                     # Respond to heartbeat if needed
                     continue
                 elif decoded_msg.startswith("!"): # Perintah tidak dikenal
@@ -109,7 +112,7 @@ def client_handler(client_conn: BetterUDPSocket, client_address: tuple):
                     # Regular chat message
                     timestamp = get_formatted_time()
                     full_message = f"{timestamp} {username}: {decoded_msg}" # Sudah ada namanya
-                    broadcast_message(full_message.encode(), sender_addr=client_address, exclude_sender=True)
+                    broadcast_message(full_message.encode(), sender_addr=client_address, exclude_sender=False)
 
 
             except socket.timeout:
@@ -132,7 +135,7 @@ def client_handler(client_conn: BetterUDPSocket, client_address: tuple):
     
         # Kirim pesan bahwa user telah keluar, hanya jika bukan karena server shutdown
         if not shutdown_event.is_set() and client_conn.connected: # Cek apakah masih connected sebelum broadcast
-            disconnect_broadcast_message = f"[{get_formatted_time()}] [SERVER]: {username} has left the chat."
+            disconnect_broadcast_message = f"{get_formatted_time()} [SERVER]: {username} has left the chat."
             broadcast_message(disconnect_broadcast_message.encode(), sender_addr=client_address, exclude_sender=False)
 
         with clients_lock:

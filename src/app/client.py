@@ -1,7 +1,7 @@
 # DISCLAIMER: server.py pada branch client HANYA UNTUK TESTING! (AKAN DIHAPUS NANTINYA)
 # UNTUK SAAT INI HANYA BISA CONNECT 1 KLIEN ENTAH KENAPA
 # 1. Buka terminal -> python server.py
-# 2. Buka terminal baru -> python client.py 127.0.0.1 -p 55555
+# 2. Buka terminal baru -> python -m app.client.py 127.0.0.1 -p 55555 -n client1
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -11,13 +11,25 @@ import threading, time, os, argparse
 
 # Fungsi menerima data chat dari server
 def receiveDataServer(clientSocket: BetterUDPSocket, msgs: deque, server_ip: str):
+    cnt = 0
     while True:
         try:
             msg = clientSocket.receive() # Asumsi sementara server kirim msg per baris 
             if msg:
                 decoded_msg = msg.decode()
+
+                if (decoded_msg == "SHUTDOWN"):
+                    print("Exiting in 3 seconds...")
+                    time.sleep(3)
+                    os._exit(0)
+                
+                if (decoded_msg.startswith("COUNT: ")):
+                    _, c = decoded_msg.split(": ", 1)
+                    cnt = int(c)
+                    continue
+
                 msgs.append(decoded_msg)
-                displayChat(msgs, server_ip)
+            displayChat(msgs, server_ip, cnt)
         except Exception:
             pass
 
@@ -25,16 +37,16 @@ def receiveDataServer(clientSocket: BetterUDPSocket, msgs: deque, server_ip: str
 def heartbeat(clientSocket: BetterUDPSocket):
     while True:
         try:
-            clientSocket.send("!heartbeat".encode()) # Sementara dikirim dalam format "!heartbeat"
+            clientSocket.send(("[HEARTBEAT]: !heartbeat").encode()) # Sementara dikirim dalam format "!heartbeat"
             time.sleep(1)
         except Exception:
             pass
 
 # Mendisplay chat 20 terakhir dalam msgs
-def displayChat(msgs: deque, server_ip):
+def displayChat(msgs: deque, server_ip, cnt: int):
     os.system('cls' if os.name == 'nt' else 'clear')
     # TODO: Mekanisme passing online usernya gimana?
-    print(f"Connected to {server_ip}'s chat room (x online users)")
+    print(f"Connected to {server_ip}'s chat room ({cnt} online users)")
     print("---------------------------------------------------------------------", end='')
     print("\n" + "\n".join(msgs))
     print("---------------------------------------------------------------------")
@@ -67,7 +79,7 @@ def main():
     msgs = deque(maxlen=20) # Sementara kepikirannya pake deque untuk simpan chat
 
     threading.Thread(target=receiveDataServer, args=(clientSock, msgs, SERVER_IP), daemon=True).start()
-    # threading.Thread(target=heartbeat, args=(clientSock,), daemon=True).start()
+    threading.Thread(target=heartbeat, args=(clientSock,), daemon=True).start()
     
     with patch_stdout():
         # TODO: deteksi server mati
@@ -84,11 +96,12 @@ def main():
                     os.system('cls' if os.name == 'nt' else 'clear')
                     break
                 elif msg.startswith("!kill"):
-                    clientSock.send(msg.encode())
+                    clientSock.send((CLIENT_NAME + ": " + msg).encode())
+                    continue
                 elif msg.startswith("!change"):
                     OLD_CLIENT_NAME = CLIENT_NAME
                     CLIENT_NAME = msg.removeprefix("!change ")
-                    clientSock.send((f"[SERVER]: {OLD_CLIENT_NAME} changes it's username to {CLIENT_NAME}"))
+                    clientSock.send((f"[SERVER]: {OLD_CLIENT_NAME} changes it's username to {CLIENT_NAME}").encode())
                     continue
                 
                 # TODO: jika kalimat terlalu panjang maka dia kepotong karena kena batas maksimum MTU
