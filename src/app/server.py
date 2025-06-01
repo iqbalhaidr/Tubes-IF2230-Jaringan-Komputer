@@ -1,124 +1,199 @@
+# server.py - Fixed version
 import socket
 import threading
+import time
 from datetime import datetime
 from protocol.socket_wrapper import BetterUDPSocket
 
-# Dictionary untuk menyimpan koneksi client yang aktif.
-connected_clients: dict[tuple, BetterUDPSocket] = {}
-client_locks: dict[tuple, threading.Lock] = {} # Untuk mengamankan akses ke socket client jika diperlukan
+# Thread-safe client management
+connected_clients = {}
+clients_lock = threading.Lock()
 
 def get_formatted_time():
-    """Mengembalikan waktu saat ini dalam format [HH:MM AM/PM] tanpa leading zero di jam."""
+    """Returns current time in format [HH:MM AM/PM] without leading zero."""
     return datetime.now().strftime("[%I:%M %p]").lstrip("0")
 
+def broadcast_message(message: bytes, sender_addr: tuple = None):
+    """Safely broadcast message to all connected clients except sender."""
+    with clients_lock:
+        disconnected_clients = []
+        
+        for addr, conn in connected_clients.items():
+            if addr == sender_addr:  # Don't send back to sender
+                continue
+                
+            try:
+                if conn.connected:
+                    conn.send(message)
+                else:
+                    disconnected_clients.append(addr)
+            except Exception as e:
+                print(f"[{get_formatted_time()}] Failed to send to {addr}: {e}")
+                disconnected_clients.append(addr)
+        
+        # Clean up disconnected clients
+        for addr in disconnected_clients:
+            if addr in connected_clients:
+                print(f"[{get_formatted_time()}] Removing disconnected client {addr}")
+                try:
+                    connected_clients[addr].close()
+                except:
+                    pass
+                del connected_clients[addr]
+
 def client_handler(client_conn: BetterUDPSocket, client_address: tuple):
-    """
-    Fungsi ini akan dijalankan di thread terpisah untuk setiap klien yang terhubung.
-    Tugasnya adalah menerima pesan dari klien dan mengirim balasan.
-    """
-    print(f"[HANDLER] Memulai penanganan untuk klien {client_address}")
+    """Handle individual client communication in separate thread."""
+    print(f"[{get_formatted_time()}] Started handler for client {client_address}")
+    
     try:
         while client_conn.connected:
             try:
-                msg = client_conn.receive(timeout=3)
-                if msg:
-                    decoded_msg = msg.decode()
-                    print(f"[{get_formatted_time()}][{client_address}] Menerima: {decoded_msg}")
+                msg = client_conn.receive(timeout=5.0)
+                if not msg:
+                    continue
+                    
+                decoded_msg = msg.decode().strip()
+                
+                if not decoded_msg:
+                    continue
+                    
+                print(f"[{get_formatted_time()}][{client_address}] Received: {decoded_msg}")
 
-                    if decoded_msg == "!quit":
-                        print(f"[{get_formatted_time()}][{client_address}] Klien meminta keluar.")
-                        break 
+                # Handle special commands
+                if decoded_msg == "!disconnect":
+                    print(f"[{get_formatted_time()}][{client_address}] Client requested disconnect.")
+                    break
+                elif decoded_msg == "!heartbeat":
+                    # Respond to heartbeat if needed
+                    continue
+                elif decoded_msg.startswith("!"):
+                    # Handle other special commands
+                    continue
+                else:
+                    # Regular chat message - broadcast to all other clients
+                    timestamp = get_formatted_time()
+                    full_message = f"{timestamp} <{client_address[0]}:{client_address[1]}>: {decoded_msg}"
+                    broadcast_message(full_message.encode(), sender_addr=client_address)
 
-                    if decoded_msg != "!heartbeat":
-                        full_message = f"{get_formatted_time()} <{client_address[1]}>: {decoded_msg}".encode()
-
-                        for addr, conn in list(connected_clients.items()): 
-                            if conn.connected: 
-                                try:
-                                    conn.send(full_message)
-                                except Exception as e:
-                                    print(f"[{get_formatted_time()}] Gagal mengirim ke {addr}: {e}")
             except socket.timeout:
-                pass
-            except RuntimeError as e:
-
-                print(f"[{get_formatted_time()}][{client_address}] Runtime error: {e}. Menutup koneksi.")
-                break
+                # Check if client is still connected
+                continue
             except Exception as e:
-                print(f"[{get_formatted_time()}][{client_address}] Error dalam handler klien: {e}")
+                print(f"[{get_formatted_time()}][{client_address}] Handler error: {e}")
                 break
+                
+    except Exception as e:
+        print(f"[{get_formatted_time()}][{client_address}] Fatal handler error: {e}")
     finally:
+        # Cleanup client connection
+        print(f"[{get_formatted_time()}][{client_address}] Closing client connection.")
+        
+        with clients_lock:
+            if client_address in connected_clients:
+                del connected_clients[client_address]
+        
+        try:
+            client_conn.close()
+        except:
+            pass
 
-        print(f"[{get_formatted_time()}][{client_address}] Menutup koneksi klien.")
-        if client_address in connected_clients:
-            del connected_clients[client_address]
-        if client_address in client_locks:
-            del client_locks[client_address]
-        client_conn.close()
-
-def listen_for_new_connections(server_listener_socket: BetterUDPSocket):
-    """
-    Fungsi ini dijalankan di thread terpisah untuk terus menerima koneksi baru.
-    """
-    print(f"[{get_formatted_time()}] Thread listener aktif.")
+def listen_for_connections(server_socket: BetterUDPSocket):
+    """Listen for new client connections in separate thread."""
+    print(f"[{get_formatted_time()}] Connection listener thread started.")
+    
     while True:
         try:
-
-            conn_socket, client_address = server_listener_socket.accept(timeout=1.0)
+            # Accept new connection with timeout to allow clean shutdown
+            conn_socket, client_address = server_socket.accept(timeout=2.0)
             
-            if client_address in connected_clients:
-                print(f"[{get_formatted_time()}] Klien {client_address} mencoba terhubung ulang. Mengabaikan.")
-                conn_socket.close() # Tutup socket duplikat
-                continue
-
-            connected_clients[client_address] = conn_socket
-            client_locks[client_address] = threading.Lock() 
-            print(f"[{get_formatted_time()}] Klien baru terhubung: {client_address}")
-
-            # thread baru untuk menangani komunikasi dengan klien ini
+            # Check for duplicate connections
+            with clients_lock:
+                if client_address in connected_clients:
+                    print(f"[{get_formatted_time()}] Duplicate connection from {client_address}. Rejecting.")
+                    try:
+                        conn_socket.close()
+                    except:
+                        pass
+                    continue
+                
+                # Add new client
+                connected_clients[client_address] = conn_socket
+                client_count = len(connected_clients)
+            
+            print(f"[{get_formatted_time()}] New client connected: {client_address} (Total: {client_count})")
+            
+            # Start handler thread for this client
             client_thread = threading.Thread(
                 target=client_handler,
                 args=(conn_socket, client_address),
-                daemon=True 
+                daemon=True
             )
             client_thread.start()
 
         except socket.timeout:
-            pass
+            # Normal timeout, continue listening
+            continue
         except Exception as e:
-            print(f"[{get_formatted_time()}] Error saat menerima koneksi baru: {e}")
-            break
+            print(f"[{get_formatted_time()}] Error accepting connection: {e}")
+            # Don't break, continue listening for other connections
+            time.sleep(1)
 
 def main():
     SERVER_IP = '127.0.0.1'
-    SERVER_PORT = 55555
+    SERVER_PORT = 12354
 
-    server_listener_socket = BetterUDPSocket()
-    server_listener_socket.listen(SERVER_IP, SERVER_PORT)
-    print(f"[{get_formatted_time()}] Server mendengarkan di {SERVER_IP}:{SERVER_PORT}\n")
-
-    # Jalankan thread untuk terus menerima koneksi baru
-    listener_thread = threading.Thread(
-        target=listen_for_new_connections,
-        args=(server_listener_socket,),
-        daemon=True
-    )
-    listener_thread.start()
-
-
+    # Create server socket
+    server_socket = BetterUDPSocket()
+    
     try:
-        while True:
-            time.sleep(1) 
-    except KeyboardInterrupt:
-        print(f"[{get_formatted_time()}] Server dimatikan oleh pengguna.")
-    finally:
-        server_listener_socket.close() 
+        server_socket.listen(SERVER_IP, SERVER_PORT)
+        print(f"[{get_formatted_time()}] Server listening on {SERVER_IP}:{SERVER_PORT}")
+        print(f"[{get_formatted_time()}] Press Ctrl+C to stop server\n")
 
-        for addr, conn in list(connected_clients.items()):
-            print(f"[{get_formatted_time()}] Menutup koneksi sisa dengan {addr}...")
-            conn.close()
-        print(f"[{get_formatted_time()}] Server telah berhenti.")
+        # Start connection listener thread
+        listener_thread = threading.Thread(
+            target=listen_for_connections,
+            args=(server_socket,),
+            daemon=True
+        )
+        listener_thread.start()
+
+        # Main server loop
+        while True:
+            time.sleep(1)
+            
+            # Periodically check and clean up dead connections
+            with clients_lock:
+                if connected_clients:
+                    active_clients = len([c for c in connected_clients.values() if c.connected])
+                    if active_clients != len(connected_clients):
+                        print(f"[{get_formatted_time()}] Active clients: {active_clients}")
+
+    except KeyboardInterrupt:
+        print(f"\n[{get_formatted_time()}] Server shutdown requested by user.")
+    except Exception as e:
+        print(f"[{get_formatted_time()}] Server error: {e}")
+    finally:
+        # Cleanup
+        print(f"[{get_formatted_time()}] Shutting down server...")
+        
+        # Close all client connections
+        with clients_lock:
+            for addr, conn in list(connected_clients.items()):
+                print(f"[{get_formatted_time()}] Closing connection to {addr}")
+                try:
+                    conn.close()
+                except:
+                    pass
+            connected_clients.clear()
+        
+        # Close server socket
+        try:
+            server_socket.close()
+        except:
+            pass
+            
+        print(f"[{get_formatted_time()}] Server stopped.")
 
 if __name__ == "__main__":
-    import time
     main()

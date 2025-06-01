@@ -65,7 +65,7 @@ def main():
     msgs = deque(maxlen=20) # Sementara kepikirannya pake deque untuk simpan chat
 
     threading.Thread(target=receiveDataServer, args=(clientSock, msgs, SERVER_IP), daemon=True).start()
-    threading.Thread(target=heartbeat, args=(clientSock,), daemon=True).start()
+    # threading.Thread(target=heartbeat, args=(clientSock,), daemon=True).start()
     
     with patch_stdout():
         # TODO: deteksi server mati

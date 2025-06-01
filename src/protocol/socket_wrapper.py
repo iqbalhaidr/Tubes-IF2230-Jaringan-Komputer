@@ -27,30 +27,42 @@ class SelectiveRepeatWindow:
     def add_segment(self, seq_num: int, segment: Segment):
         """Tambah segment ke buffer untuk tracking ACK"""
         with self.lock:
+            is_first_segment_in_empty_window = not self.buffer
             self.buffer[seq_num] = segment
             self.acked[seq_num] = False
+            if is_first_segment_in_empty_window:
+                self.base = seq_num
 
     def mark_acked(self, seq_num: int) -> bool:
         """Mark segment sebagai ACK‐ed, return True jika window bergeser"""
         with self.lock:
-            if seq_num in self.acked:
+            if seq_num in self.buffer and not self.acked.get(seq_num, False):
                 self.acked[seq_num] = True
 
                 # Geser window base jika segment di base sudah di‐ACK
                 window_moved = False
+                original_base = self.base
+
                 while self.base in self.acked and self.acked[self.base]:
-                    del self.buffer[self.base]
-                    del self.acked[self.base]
-                    self.base += 1
+                    if self.base in self.buffer: # Seharusnya selalu ada jika belum digeser
+                        del self.buffer[self.base]
+
+
                     window_moved = True
+                    if not self.buffer:
+                        self.base = self.next_seq_num
+                        break 
+                    else:
+                        self.base = min(self.buffer.keys())
+                
                 return window_moved
-            return False
+            return False 
 
     def get_unacked_segments(self) -> Dict[int, Segment]:
         """Dapatkan segment yang belum di‐ACK untuk retransmission"""
         with self.lock:
-            return {seq: seg for seq, seg in self.buffer.items()
-                    if not self.acked.get(seq, True)}
+            return {seq: seg for seq, seg in self.buffer.items() 
+                   if not self.acked.get(seq, False)}
 
 
 class BetterUDPSocket:
@@ -119,6 +131,9 @@ class BetterUDPSocket:
         """
         if not self.connected:
             raise RuntimeError("Socket not connected")
+        
+        self._start_retransmit_timer()
+        
 
         # Spesifikasi: maksimal 64 byte untuk payload
         max_payload_size = min(64, self.mtu - Segment.HEADER_SIZE)
@@ -141,7 +156,7 @@ class BetterUDPSocket:
                 dst_port=self.peer_addr[1],
                 seq_num=seq_num,
                 ack_num=self.ack,
-                flags=0x10,  # ACK flag untuk piggyback acknowledgment
+                flags=0x10, 
                 payload=chunk
             )
 
@@ -360,6 +375,8 @@ class BetterUDPSocket:
         self.udp_socket.bind((ip, port))
         print(f"[LISTEN] Listening on {ip}:{port}")
 
+    # socket_wrapper.py - Critical fix for accept() method
+
     def accept(self, timeout: float = None):
         """
         Tunggu dan terima koneksi masuk dengan 3-way handshake, dengan retransmit SYN+ACK.
@@ -391,6 +408,13 @@ class BetterUDPSocket:
         eph_port = new_conn_socket_raw.getsockname()[1]
 
         y = random.randrange(0, 2**32)
+        
+        # CRITICAL FIX: Create new socket for this client BEFORE sending SYN+ACK
+        client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        client_socket.bind(('', 0))  # Bind to new port
+        new_port = client_socket.getsockname()[1]
+        
+        # Send SYN+ACK with the NEW port number
         synack = Segment(
             src_port=eph_port,
             dst_port=addr[1],
