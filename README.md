@@ -1,4 +1,4 @@
-# ChatTCP - JarJarJarKom
+# Tugas Besar IF2230 Jaringan Komputer 2024/2025
 
 <p align="center">
   <img src="tests/jar.png" alt="jar" />
